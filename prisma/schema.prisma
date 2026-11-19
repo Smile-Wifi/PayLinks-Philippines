@@ -1,0 +1,116 @@
+// PesoMatch Gateway - Production Schema
+// SQLite for local / easy deploy. Switch provider to "postgresql" for production.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Merchant {
+  id            String   @id @default(cuid())
+  name          String
+  apiKey        String   @unique // pm_live_xxx or pm_test_xxx
+  webhookSecret String   // for HMAC signing
+  webhookUrl    String?  // optional destination for payment.succeeded
+  brandName     String?
+  brandEmoji    String   @default("💰")
+  brandColor    String   @default("#0b6bff")
+  brandFooter   String   @default("Thank you for your payment!")
+  logoUrl       String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  requests      PaymentRequest[]
+  payments      Payment[]
+  auditLogs     AuditLog[]
+
+  @@index([apiKey])
+}
+
+model PaymentRequest {
+  id              String   @id @default(cuid())
+  merchantId      String
+  externalId      String?  // optional merchant-side order id
+  customerName    String
+  amountCentavos  Int      // exact payable amount including unique tag (e.g. 14937 = ₱149.37)
+  baseAmount      Int      // original amount without tag (e.g. 14900)
+  status          String   // pending | paid | expired | review | rejected
+  expiresAt       DateTime
+  confirmationToken String? @unique // PM-XXXX-XXXX-XXXX single-use
+  tokenConfirmedAt DateTime?
+  paidAt          DateTime?
+  customerEvidence String? // optional GCash ref entered by customer
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  payment         Payment?
+  auditLogs       AuditLog[]
+
+  @@unique([merchantId, amountCentavos, status], name: "unique_pending_tag") // enforced in app logic for pending only
+  @@index([merchantId, status])
+  @@index([amountCentavos, status])
+  @@index([confirmationToken])
+  @@index([expiresAt])
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  merchantId      String
+  requestId       String?  @unique // null if unmatched
+  gcashRef        String   // unique reference from SMS
+  amountCentavos  Int
+  senderName      String?
+  rawSms          String?
+  matchedBy       String   // auto | admin | late
+  matchedAt       DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  request         PaymentRequest? @relation(fields: [requestId], references: [id])
+
+  @@unique([merchantId, gcashRef]) // hard uniqueness on reference per merchant
+  @@index([merchantId, amountCentavos])
+  @@index([matchedAt])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  merchantId  String
+  requestId   String?
+  actor       String   // system | auto | admin | merchant | customer
+  action      String
+  details     String?
+  prevHash    String
+  hash        String   // FNV-1a style hash chain
+  createdAt   DateTime @default(now())
+
+  merchant    Merchant @relation(fields: [merchantId], references: [id])
+  request     PaymentRequest? @relation(fields: [requestId], references: [id])
+
+  @@index([merchantId, createdAt])
+  @@index([requestId])
+}
+
+model WebhookDelivery {
+  id          String   @id @default(cuid())
+  merchantId  String
+  requestId   String
+  event       String   // payment.succeeded
+  payload     String   // JSON
+  signature   String
+  status      String   // pending | delivered | failed
+  attempts    Int      @default(0)
+  lastError   String?
+  deliveredAt DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([merchantId, status])
+  @@index([requestId])
+}
