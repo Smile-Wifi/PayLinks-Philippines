@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { formatPeso } from "@/lib/crypto";
 import { notFound } from "next/navigation";
+import ScreenshotUpload from "./ScreenshotUpload"; // client component
 
 export default async function PayPage({
   params,
@@ -42,7 +43,11 @@ export default async function PayPage({
             <p className="mt-6 text-sm text-[var(--mute)]">Your confirmation token</p>
             <div
               className="mt-2 rounded-xl border-2 border-dashed py-3 text-xl font-bold mono tracking-wider"
-              style={{ borderColor: brand.color, color: brand.color, background: "var(--okb)" }}
+              style={{
+                borderColor: brand.color,
+                color: brand.color,
+                background: "var(--okb)",
+              }}
             >
               {request.confirmationToken}
             </div>
@@ -54,13 +59,17 @@ export default async function PayPage({
 
         <div className="card mt-6 text-left">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl text-2xl" style={{ background: "var(--line)" }}>
+            <div
+              className="flex h-11 w-11 items-center justify-center rounded-xl text-2xl"
+              style={{ background: "var(--line)" }}
+            >
               {brand.emoji}
             </div>
             <div>
               <b>{brand.name}</b>
               <div className="text-xs text-[var(--mute)]">
-                Receipt {request.id.slice(0, 12)}… · {request.paidAt?.toLocaleString()}
+                Receipt {request.id.slice(0, 12)}… ·{" "}
+                {request.paidAt?.toLocaleString()}
               </div>
             </div>
           </div>
@@ -70,11 +79,13 @@ export default async function PayPage({
     );
   }
 
-  // Pending / other states
+  // Pending / review / expired
   return (
     <div className="mx-auto max-w-md p-6 text-center">
       <p className="text-sm text-[var(--mute)]">Pay {brand.name}</p>
-      <div className="mt-2 text-4xl font-extrabold mono">{formatPeso(request.amountCentavos)}</div>
+      <div className="mt-2 text-4xl font-extrabold mono">
+        {formatPeso(request.amountCentavos)}
+      </div>
       <p className="mt-1 text-sm text-[var(--mute)]">
         Send this <b>exact amount</b>, including the centavos
       </p>
@@ -89,16 +100,38 @@ export default async function PayPage({
       </div>
 
       <p className="mt-4">
-        <span className={`chip chip-${request.status === "pending" ? "mu" : request.status === "review" ? "warn" : "bad"}`}>
+        <span
+          className={`chip chip-${
+            request.status === "pending"
+              ? "mu"
+              : request.status === "review"
+              ? "warn"
+              : "bad"
+          }`}
+        >
           {request.status}
         </span>
       </p>
 
       {request.status === "pending" && (
-        <p className="mt-4 text-xs text-[var(--mute)]">
-          Paying the exact tagged amount is what confirms you.
-          <br />
-          No need to type a reference number.
+        <>
+          <p className="mt-4 text-xs text-[var(--mute)]">
+            Paying the exact tagged amount is what confirms you.
+            <br />
+            No need to type a reference number.
+          </p>
+
+          {/* AI Screenshot Upload */}
+          <div className="mt-8">
+            <ScreenshotUpload requestId={request.id} />
+          </div>
+        </>
+      )}
+
+      {request.status === "review" && (
+        <p className="mt-4 text-sm text-[var(--warn)]">
+          Your payment is under review. Please wait a moment or contact the
+          merchant.
         </p>
       )}
 

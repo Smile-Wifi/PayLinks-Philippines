@@ -1,10 +1,11 @@
 export type RequestStatus = "pending" | "paid" | "expired" | "review" | "rejected";
 
 export type MatchResult =
-  | { type: "matched"; requestId: string; by: "auto" }
+  | { type: "matched"; requestId: string; by: "auto" | "ai" }
   | { type: "late_review"; requestId: string }
   | { type: "duplicate_ref" }
-  | { type: "unmatched" };
+  | { type: "unmatched" }
+  | { type: "ai_review"; requestId: string; confidence: number };
 
 export interface CreateRequestInput {
   customerName: string;
@@ -29,4 +30,14 @@ export interface WebhookPayload {
   customerName: string;
   paidAt: string;
   token: string;
+}
+
+export interface AiEvidence {
+  amountCentavos: number | null;
+  gcashRef: string | null;
+  senderName: string | null;
+  paidAt: string | null;
+  confidence: number;
+  provider: string;
+  extractedAt: string;
 }

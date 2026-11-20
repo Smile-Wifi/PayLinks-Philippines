@@ -1,14 +1,20 @@
 import { prisma } from "./db";
 import { generateToken, fnv1a, signPayload, formatPeso } from "./crypto";
-import type { CreateRequestInput, IngestPaymentInput, MatchResult, WebhookPayload } from "./types";
+import { extractFromSms } from "./ai";
+import type {
+  CreateRequestInput,
+  IngestPaymentInput,
+  MatchResult,
+  WebhookPayload,
+  AiEvidence,
+} from "./types";
 
 const DEFAULT_EXPIRY_MINUTES = 15;
 const MAX_TAG_ATTEMPTS = 99;
+const AI_AUTO_THRESHOLD = 85; // confidence >= this + exact amount → auto paid
 
 /**
  * Allocate a unique centavo tag for the given base amount.
- * e.g. base 149 → 14937 (₱149.37)
- * Guarantees uniqueness among currently pending requests for this merchant.
  */
 async function allocateCentavoTag(
   merchantId: string,
@@ -58,17 +64,19 @@ export async function createPaymentRequest(
     },
   });
 
-  await appendAudit(merchantId, request.id, "system", "Request created", formatPeso(amountCentavos));
+  await appendAudit(
+    merchantId,
+    request.id,
+    "system",
+    "Request created",
+    formatPeso(amountCentavos)
+  );
 
   return request;
 }
 
 /**
- * Core matching engine.
- * - Rejects duplicate GCash references
- * - Auto-matches exact amount to a single pending request
- * - Sends late exact payments on expired requests to review
- * - Holds everything else as unmatched
+ * Core matching engine (original + AI-enhanced SMS path)
  */
 export async function ingestPayment(
   merchantId: string,
@@ -82,11 +90,17 @@ export async function ingestPayment(
   });
 
   if (existing) {
-    await appendAudit(merchantId, null, "system", "Duplicate ref rejected", input.gcashRef);
+    await appendAudit(
+      merchantId,
+      null,
+      "system",
+      "Duplicate ref rejected",
+      input.gcashRef
+    );
     return { result: { type: "duplicate_ref" }, message: "Duplicate reference rejected." };
   }
 
-  // 2. Create payment record (unmatched for now)
+  // 2. Create payment record
   const payment = await prisma.payment.create({
     data: {
       merchantId,
@@ -94,11 +108,11 @@ export async function ingestPayment(
       amountCentavos: input.amountCentavos,
       senderName: input.senderName,
       rawSms: input.rawSms,
-      matchedBy: "auto", // will update if needed
+      matchedBy: "auto",
     },
   });
 
-  // 3. Look for exact pending match
+  // 3. Exact pending match
   const open = await prisma.paymentRequest.findMany({
     where: {
       merchantId,
@@ -116,7 +130,7 @@ export async function ingestPayment(
     };
   }
 
-  // 4. Late payment on expired request
+  // 4. Late payment on expired
   const late = await prisma.paymentRequest.findFirst({
     where: {
       merchantId,
@@ -166,12 +180,165 @@ export async function ingestPayment(
 }
 
 /**
+ * NEW: Validate payment from customer-uploaded screenshot (AI)
+ */
+export async function validateWithScreenshot(
+  requestId: string,
+  imageBase64: string,
+  mimeType = "image/jpeg"
+): Promise<{
+  ok: boolean;
+  status: "paid" | "review" | "rejected" | "pending";
+  message: string;
+  confidence: number;
+  extraction: any;
+}> {
+  const request = await prisma.paymentRequest.findUnique({
+    where: { id: requestId },
+    include: { merchant: true, payment: true },
+  });
+
+  if (!request) {
+    return {
+      ok: false,
+      status: "rejected",
+      message: "Request not found",
+      confidence: 0,
+      extraction: null,
+    };
+  }
+
+  if (request.status === "paid") {
+    return {
+      ok: true,
+      status: "paid",
+      message: "Already paid",
+      confidence: 100,
+      extraction: null,
+    };
+  }
+
+  if (!["pending", "review", "expired"].includes(request.status)) {
+    return {
+      ok: false,
+      status: request.status as any,
+      message: `Cannot validate in status: ${request.status}`,
+      confidence: 0,
+      extraction: null,
+    };
+  }
+
+  // Call AI
+  const { extractFromScreenshot } = await import("./ai");
+  const extraction = await extractFromScreenshot(imageBase64, mimeType);
+
+  const evidence: AiEvidence = {
+    amountCentavos: extraction.amountCentavos,
+    gcashRef: extraction.gcashRef,
+    senderName: extraction.senderName,
+    paidAt: extraction.paidAt,
+    confidence: extraction.confidence,
+    provider: extraction.provider,
+    extractedAt: new Date().toISOString(),
+  };
+
+  // Save evidence
+  await prisma.paymentRequest.update({
+    where: { id: requestId },
+    data: {
+      aiEvidence: evidence as any,
+      customerEvidence: extraction.gcashRef || undefined,
+    },
+  });
+
+  const amountMatch =
+    extraction.amountCentavos !== null &&
+    extraction.amountCentavos === request.amountCentavos;
+
+  // Decision logic
+  if (amountMatch && extraction.confidence >= AI_AUTO_THRESHOLD) {
+    // Auto-approve
+    let paymentId = request.payment?.id;
+    if (!paymentId) {
+      // Create payment record from AI data
+      const p = await prisma.payment.create({
+        data: {
+          merchantId: request.merchantId,
+          gcashRef: extraction.gcashRef || `ai-${Date.now()}`,
+          amountCentavos: request.amountCentavos,
+          senderName: extraction.senderName,
+          matchedBy: "ai",
+          requestId,
+        },
+      });
+      paymentId = p.id;
+    } else {
+      await prisma.payment.update({
+        where: { id: paymentId },
+        data: { matchedBy: "ai" },
+      });
+    }
+
+    await markPaid(requestId, paymentId, "ai");
+    await appendAudit(
+      request.merchantId,
+      requestId,
+      "ai",
+      "Paid (AI screenshot)",
+      `confidence ${extraction.confidence}% | ref ${extraction.gcashRef}`
+    );
+
+    return {
+      ok: true,
+      status: "paid",
+      message: "Payment verified automatically. Thank you!",
+      confidence: extraction.confidence,
+      extraction,
+    };
+  }
+
+  // Medium confidence or amount mismatch → review
+  if (extraction.confidence >= 50 || amountMatch) {
+    await prisma.paymentRequest.update({
+      where: { id: requestId },
+      data: { status: "review" },
+    });
+    await appendAudit(
+      request.merchantId,
+      requestId,
+      "ai",
+      "Needs review (AI)",
+      `confidence ${extraction.confidence}% | amountMatch=${amountMatch}`
+    );
+
+    return {
+      ok: true,
+      status: "review",
+      message:
+        "We received your screenshot. It is under review. You will be notified shortly.",
+      confidence: extraction.confidence,
+      extraction,
+    };
+  }
+
+  // Low confidence
+  return {
+    ok: false,
+    status: "pending",
+    message:
+      "Could not clearly read the receipt. Please make sure the amount and reference number are visible, or contact the merchant.",
+    confidence: extraction.confidence,
+    extraction,
+  };
+}
+
+/**
  * Mark a request as paid, generate token, queue webhook.
  */
 async function markPaid(
   requestId: string,
   paymentId: string,
-  by: "auto" | "admin"
+  by: "auto" | "admin" | "ai"
 ) {
   const token = generateToken();
 
@@ -193,12 +360,15 @@ async function markPaid(
   await appendAudit(
     request.merchantId,
     requestId,
-    by === "auto" ? "auto" : "admin",
+    by === "auto" ? "auto" : by === "ai" ? "ai" : "admin",
     "Paid",
-    by === "auto" ? "exact amount match" : "manual override"
+    by === "auto"
+      ? "exact amount match"
+      : by === "ai"
+      ? "AI screenshot verification"
+      : "manual override"
   );
 
-  // Queue signed webhook
   await queueWebhook(request);
 }
 
@@ -221,7 +391,6 @@ export async function approveRequest(
 
   let payId = paymentId;
   if (!payId) {
-    // Create a synthetic payment if none exists
     const p = await prisma.payment.create({
       data: {
         merchantId,
@@ -235,7 +404,13 @@ export async function approveRequest(
   }
 
   await markPaid(requestId, payId, "admin");
-  await appendAudit(merchantId, requestId, "admin", "Paid (manual)", `OVERRIDE: ${note}`);
+  await appendAudit(
+    merchantId,
+    requestId,
+    "admin",
+    "Paid (manual)",
+    `OVERRIDE: ${note}`
+  );
 }
 
 /**
@@ -288,7 +463,7 @@ export async function confirmToken(merchantId: string, token: string) {
 }
 
 /**
- * Expire pending requests past their deadline (call from cron or on read)
+ * Expire pending requests past their deadline
  */
 export async function expireStaleRequests(merchantId?: string) {
   const where: any = {
@@ -297,7 +472,10 @@ export async function expireStaleRequests(merchantId?: string) {
   };
   if (merchantId) where.merchantId = merchantId;
 
-  const stale = await prisma.paymentRequest.findMany({ where, select: { id: true, merchantId: true } });
+  const stale = await prisma.paymentRequest.findMany({
+    where,
+    select: { id: true, merchantId: true },
+  });
 
   for (const r of stale) {
     await prisma.paymentRequest.update({
@@ -382,35 +560,25 @@ async function queueWebhook(request: {
       event: "payment.succeeded",
       payload,
       signature,
-      status: request.merchant.webhookUrl ? "pending" : "pending", // still record even without URL
+      status: "pending",
     },
   });
-
-  // In production you would fire-and-forget or use a queue here.
-  // For now we just store it; a separate worker can deliver.
 }
 
 /**
- * Parse a GCash-style SMS into amount + reference.
- * Handles common formats.
+ * Parse a GCash-style SMS (kept for backward compatibility)
+ * Now also tries AI if rules are weak.
  */
-export function parseGCashSms(sms: string): {
-  amountCentavos: number;
-  gcashRef: string;
-  senderName?: string;
-} | null {
-  const amountMatch = sms.match(/(?:PHP|₱)\s?([\d,]+(?:\.\d{1,2})?)/i);
-  const refMatch = sms.match(/Ref\.?\s*(?:No\.?)?\s*:?\s*(\d[\d\s]{8,})/i);
-
-  if (!amountMatch || !refMatch) return null;
-
-  const amountCentavos = Math.round(
-    parseFloat(amountMatch[1].replace(/,/g, "")) * 100
-  );
-  const gcashRef = refMatch[1].replace(/\D/g, "");
-
-  const senderMatch = sms.match(/from\s+(.+?)\s+(?:with|on|\.|,)/i);
-  const senderName = senderMatch?.[1]?.trim();
-
-  return { amountCentavos, gcashRef, senderName };
+export async function parseGCashSms(sms: string) {
+  // First try fast rules
+  const rules = extractFromSms; // will be called properly below
+  const result = await extractFromSms(sms);
+  if (result.amountCentavos && result.gcashRef) {
+    return {
+      amountCentavos: result.amountCentavos,
+      gcashRef: result.gcashRef,
+      senderName: result.senderName || undefined,
+    };
+  }
+  return null;
 }
