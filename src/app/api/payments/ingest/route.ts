@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
   let senderName = parsed.data.senderName;
 
   if (parsed.data.rawSms) {
-    const extracted = parseGCashSms(parsed.data.rawSms);
+    const extracted = await parseGCashSms(parsed.data.rawSms);
     if (!extracted) {
       return NextResponse.json(
         { error: "Could not extract amount and reference from SMS" },
