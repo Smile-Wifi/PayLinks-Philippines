@@ -31,7 +31,7 @@ export default function MerchantDashboard() {
   }
   async function uploadQR(pkg: string, file: File) {
     setMsg("Uploading QR...");
-    const base64 = await new Promise<string((res, rej)=>{ const rd=new FileReader(); rd.onload=()=>res((rd.result as string).split(",")[1]); rd.onerror=rej; rd.readAsDataURL(file); });
+    const base64 = await new Promise<string>((resolve, reject) => { const rd = new FileReader(); rd.onload = () => resolve((rd.result as string).split(",")[1]); rd.onerror = () => reject(new Error("read failed")); rd.readAsDataURL(file); });
     const r = await fetch("/api/merchant/qr", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ package: pkg, imageBase64: base64, mimeType: file.type }) });
     const d = await r.json(); setMsg(d.message || d.error || "Done"); load();
   }
