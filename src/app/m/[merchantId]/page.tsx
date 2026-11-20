@@ -1,63 +1,82 @@
 "use client";
-import { use, useState } from "react";
-export default function PublicMerchantPage({ params }: { params: Promise<{ merchantId: string }> }) {
-  const { merchantId } = use(params);
+import { useEffect, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+
+export default function MerchantStorePage() {
+  const params = useParams();
+  const searchParams = useSearchParams();
+  const merchantId = params.merchantId as string;
+  const pkgFromUrl = searchParams.get("package") || searchParams.get("amount") || "";
+  const [pkg, setPkg] = useState(pkgFromUrl === "149" ? "149" : "99");
   const [name, setName] = useState("");
-  const [amount, setAmount] = useState("");
-  const [result, setResult] = useState<any>(null);
-  const [fixed, setFixed] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [merchantName, setMerchantName] = useState("Pasko Photo Magic");
 
-  // Load fixed payments for this merchant
-  useState(() => {
-    fetch(`/api/public/merchant/${merchantId}/fixed`).then(r => r.json()).then(d => setFixed(Array.isArray(d) ? d : [])).catch(() => {});
-  });
+  useEffect(() => {
+    if (pkgFromUrl === "99" || pkgFromUrl === "149") setPkg(pkgFromUrl);
+    // Try to load merchant brand for display - ignore errors
+    fetch(`/api/merchant/public/${merchantId}`).then(r => r.json()).then(d => {
+      if (d?.brandName) setMerchantName(d.brandName);
+      if (d?.name) setMerchantName(d.name);
+    }).catch(() => {});
+  }, [pkgFromUrl, merchantId]);
 
-  async function createPayment(fixedAmount?: number, fixedName?: string) {
-    const customerName = name || "Customer";
-    const amountPesos = fixedAmount ?? Number(amount);
-    if (!amountPesos) return alert("Enter amount");
-    const res = await fetch(`/api/public/merchant/${merchantId}/pay`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ customerName, amountPesos, label: fixedName || "" }),
-    });
-    const data = await res.json();
-    if (data.amountCentavos) setResult(data);
-    else alert(data.error || "Failed");
+  async function handlePay() {
+    if (!name.trim()) { setError("Please enter your name"); return; }
+    setLoading(true); setError("");
+    try {
+      const res = await fetch(`/api/public/merchant/${merchantId}/pay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customerName: name.trim(), amountPesos: Number(pkg) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to create payment");
+      // Redirect to real checkout - each customer gets OWN /pay/xxx link
+      // This is why fixed links work for unlimited customers
+      window.location.href = data.checkoutUrl || `/pay/${data.requestId}`;
+    } catch (e: any) {
+      setError(e?.message || "Failed. Please try again.");
+      setLoading(false);
+    }
   }
 
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(typeof window !== "undefined" ? window.location.href : "")}`;
-
   return (
-    <div style={{ maxWidth: 480, margin: "0 auto", padding: 20, fontFamily: "sans-serif", textAlign: "center" }}>
-      <h1>Pay Merchant</h1>
-      <p>Scan QR or pay below. You will get a unique exact amount to pay in GCash.</p>
-      {!result ? (
-        <>
-          {fixed.length > 0 && <h3>Fixed Payments - Tap One</h3>}
-          {fixed.map((f: any) => (
-            <button key={f.id} onClick={() => createPayment(f.amountPesos, f.label)} style={{ display: "block", width: "100%", padding: 14, marginBottom: 8, fontSize: 16, background: "#0b6bff", color: "white", border: "none", borderRadius: 8 }}>
-              {f.label} - P{f.amountPesos}
-            </button>
-          ))}
-          <h3>Or Custom Amount</h3>
-          <input placeholder="Your Name" value={name} onChange={e => setName(e.target.value)} style={{ display: "block", width: "100%", padding: 12, marginBottom: 8, fontSize: 16 }} />
-          <input placeholder="Amount P" type="number" value={amount} onChange={e => setAmount(e.target.value)} style={{ display: "block", width: "100%", padding: 12, marginBottom: 8, fontSize: 16 }} />
-          <button onClick={() => createPayment()} style={{ width: "100%", padding: 14, background: "green", color: "white", fontSize: 18, border: "none", borderRadius: 8 }}>GET EXACT AMOUNT TO PAY</button>
-        </>
-      ) : (
-        <div style={{ background: "#e8f5e9", padding: 20, borderRadius: 12 }}>
-          <h2>Pay EXACTLY This in GCash:</h2>
-          <div style={{ fontSize: 42, fontWeight: "bold" }}>P{(result.amountCentavos / 100).toFixed(2)}</div>
-          <p>Do NOT pay P{(result.baseAmount / 100).toFixed(2)} - pay the exact amount with centavos above.</p>
-          <p>Customer: {result.customerName}</p>
-          <a href={`/pay/${result.id}`} style={{ display: "inline-block", marginTop: 10, padding: "12px 20px", background: "#0b6bff", color: "white", borderRadius: 8, textDecoration: "none" }}>View Receipt / Status</a>
-          <br /><button onClick={() => setResult(null)} style={{ marginTop: 12 }}>Pay Another</button>
-        </div>
-      )}
-      <div style={{ marginTop: 24 }}>
-        <img src={qrUrl} alt="Merchant QR" />
-        <p style={{ fontSize: 12, color: "#666" }}>Share this QR - it opens this page</p>
+    <div style={{ maxWidth: 420, margin: "0 auto", padding: 20, fontFamily: "system-ui", background: "#fff", minHeight: "100vh" }}>
+      <div style={{ textAlign: "center", marginBottom: 20 }}>
+        <div style={{ fontSize: 48 }}>🎄</div>
+        <h1 style={{ fontSize: 24, margin: "8px 0 4px" }}>{merchantName}</h1>
+        <p style={{ color: "#666", margin: 0 }}>Pay with GCash - Fixed Price</p>
       </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+        <button onClick={() => setPkg("99")} style={{ flex: 1, padding: 16, borderRadius: 12, border: pkg === "99" ? "2px solid #d32f2f" : "1px solid #ddd", background: pkg === "99" ? "#fff1f1" : "#fff", cursor: "pointer" }}>
+          <div style={{ fontWeight: 800, fontSize: 20 }}>₱99</div>
+          <div style={{ fontSize: 13, color: "#666" }}>5 Christmas Photos</div>
+        </button>
+        <button onClick={() => setPkg("149")} style={{ flex: 1, padding: 16, borderRadius: 12, border: pkg === "149" ? "2px solid #d32f2f" : "1px solid #ddd", background: pkg === "149" ? "#fff1f1" : "#fff", cursor: "pointer" }}>
+          <div style={{ fontWeight: 800, fontSize: 20 }}>₱149</div>
+          <div style={{ fontSize: 13, color: "#666" }}>5 Christmas Photos</div>
+        </button>
+      </div>
+
+      <label style={{ fontSize: 14, fontWeight: 600 }}>Your Name</label>
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. ANA SANTOS" style={{ width: "100%", padding: 14, borderRadius: 10, border: "1px solid #ddd", marginTop: 6, marginBottom: 16, fontSize: 16, boxSizing: "border-box" }} />
+
+      <div style={{ background: "#f8f8f8", padding: 14, borderRadius: 10, marginBottom: 16, display: "flex", justifyContent: "space-between" }}>
+        <span>To Pay:</span><b style={{ fontSize: 18 }}>₱{pkg}.00</b>
+      </div>
+
+      {error && <div style={{ background: "#ffecec", color: "#c00", padding: 12, borderRadius: 10, marginBottom: 12 }}>{error}</div>}
+
+      <button onClick={handlePay} disabled={loading} style={{ width: "100%", padding: 16, borderRadius: 12, background: "#d32f2f", color: "#fff", border: "none", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
+        {loading ? "Creating your payment..." : `Pay ₱${pkg} with GCash →`}
+      </button>
+
+      <p style={{ fontSize: 12, color: "#888", textAlign: "center", marginTop: 16 }}>
+        You will see your GCash QR on the next page.<br/>Pay EXACT ₱{pkg}.00 - no extra centavos.
+      </p>
     </div>
   );
 }
