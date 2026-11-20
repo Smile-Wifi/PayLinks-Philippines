@@ -1,4 +1,4 @@
-// PesoMatch Gateway - Production Schema (AI upgrade)
+// PesoMatch Gateway - Production Schema
 // SQLite for local / easy deploy. Switch provider to "postgresql" for production.
 
 generator client {
@@ -25,6 +25,11 @@ model Merchant {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
+  // NEW - for simple login, added by us:
+  gcashNumber   String?  @unique // 09171234567
+  gcashName     String?  // ANA SANTOS
+  pin           String?  // 4-digit PIN, e.g. "1234"
+
   requests      PaymentRequest[]
   payments      Payment[]
   auditLogs     AuditLog[]
@@ -46,8 +51,6 @@ model PaymentRequest {
   paidAt          DateTime?
   customerEvidence String? // optional GCash ref entered by customer
   notes           String?
-  // AI upgrade fields
-  aiEvidence      Json?    // stores extraction result + confidence
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -70,7 +73,7 @@ model Payment {
   amountCentavos  Int
   senderName      String?
   rawSms          String?
-  matchedBy       String   // auto | admin | late | ai
+  matchedBy       String   // auto | admin | late
   matchedAt       DateTime @default(now())
   createdAt       DateTime @default(now())
 
@@ -86,7 +89,7 @@ model AuditLog {
   id          String   @id @default(cuid())
   merchantId  String
   requestId   String?
-  actor       String   // system | auto | admin | merchant | customer | ai
+  actor       String   // system | auto | admin | merchant | customer
   action      String
   details     String?
   prevHash    String
