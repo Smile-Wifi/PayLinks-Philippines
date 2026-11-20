@@ -244,12 +244,12 @@ export async function validateWithScreenshot(
 
   // Save evidence
   await prisma.paymentRequest.update({
-    where: { id: requestId },
-    data: {
-      aiEvidence: evidence as any,
-      customerEvidence: extraction.gcashRef || undefined,
-    },
-  });
+  where: { id: requestId },
+  data: {
+    notes: JSON.stringify(evidence),
+    customerEvidence: extraction.gcashRef || undefined,
+  },
+});
 
   const amountMatch =
     extraction.amountCentavos !== null &&
