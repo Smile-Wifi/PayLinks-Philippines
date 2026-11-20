@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getMerchantFromCookie } from "@/lib/merchant-auth";
-
-// POST { package: "99" | "149", imageBase64, mimeType } -> saves QR to merchant
 export async function POST(req: NextRequest) {
   const merchant = await getMerchantFromCookie();
   if (!merchant) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
