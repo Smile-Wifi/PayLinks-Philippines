@@ -1,0 +1,1 @@
+Merchant branding API - merchant edits own store design/text
