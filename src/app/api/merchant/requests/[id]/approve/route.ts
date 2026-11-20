@@ -1,31 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
-import { getMerchantFromCookie } from "@/lib/merchant-auth";
+import { PrismaClient } from "@prisma/client";
+import { cookies } from "next/headers";
+const prisma = new PrismaClient();
+
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const merchant = await getMerchantFromCookie();
-  if (!merchant) return NextResponse.json({ error: "Not logged in as merchant" }, { status: 401 });
-  const { id } = await params;
-  const body = await req.json().catch(()=>({}));
-  const action = body.action || "approve"; // approve | reject
-  const note = body.note || "";
-  const reqData = await prisma.paymentRequest.findUnique({ where: { id }, include: { payment: true } });
-  if (!reqData) return NextResponse.json({ error: "Payment not found" }, { status: 404 });
-  if (reqData.merchantId !== merchant.id) return NextResponse.json({ error: "Not your payment" }, { status: 403 });
-  if (reqData.status === "paid" && action === "approve") return NextResponse.json({ ok: true, status: "paid", message: "Already paid" });
-  if (action === "approve") {
-    // If no payment record yet (customer paid cash / manual), create one with merchant manual ref
-    let paymentId = reqData.payment?.id;
-    const ref = body.gcashRef || `MANUAL-${reqData.id.slice(-6).toUpperCase()}`;
-    if (!paymentId) {
-      const p = await prisma.payment.create({ data: { merchantId: merchant.id, gcashRef: ref, amountCentavos: reqData.amountCentavos, senderName: reqData.customerName, matchedBy: "manual-merchant", requestId: id } });
-      paymentId = p.id;
-    } else {
-      await prisma.payment.update({ where: { id: paymentId }, data: { matchedBy: "manual-merchant", requestId: id } });
-    }
-    await prisma.paymentRequest.update({ where: { id }, data: { status: "paid", paidAt: new Date(), notes: note ? `Manual approved by merchant: ${note}` : "Manual approved by merchant" } });
-    return NextResponse.json({ ok: true, status: "paid", message: "✅ Manually approved. Customer can now get photos." });
+  try {
+    const { id } = await params;
+    const body = await req.json().catch(()=>({}));
+    const action = body.action as string;
+    const note = (body.note as string) || "";
+    if (action !== "approve" && action !== "reject") return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+    const cookieStore = await cookies();
+    const merchantId = cookieStore.get("merchant_id")?.value || cookieStore.get("merchantId")?.value;
+    if (!merchantId) return NextResponse.json({ error: "Not logged in as merchant" }, { status: 401 });
+    const payment = await prisma.paymentRequest.findFirst({ where: { id, merchantId } });
+    if (!payment) return NextResponse.json({ error: "Payment not found for this merchant" }, { status: 404 });
+    if (payment.status === "paid" || payment.status === "rejected") return NextResponse.json({ error: `Already ${payment.status}` }, { status: 400 });
+    const updated = await prisma.paymentRequest.update({
+      where: { id },
+      data: { status: action === "approve" ? "paid" : "rejected", paidAt: action === "approve" ? new Date() : payment.paidAt } as any,
+    });
+    return NextResponse.json({ message: action === "approve" ? "Approved manually - customer can now get photos" : "Rejected", request: updated });
+  } catch (e: any) {
+    console.error("manual approve error", e);
+    return NextResponse.json({ error: e?.message || "Approve failed" }, { status: 500 });
   }
-  // reject
-  await prisma.paymentRequest.update({ where: { id }, data: { status: "rejected", notes: note ? `Rejected by merchant: ${note}` : "Rejected by merchant" } });
-  return NextResponse.json({ ok: true, status: "rejected", message: "Payment rejected." });
 }
