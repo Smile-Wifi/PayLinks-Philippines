@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useEffect, useState } from "react";
 
 export default function MerchantDashboard() {
@@ -6,7 +6,7 @@ export default function MerchantDashboard() {
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
-  const [branding, setBranding] = useState({ brandName:"", brandEmoji:"🎄", brandColor:"#d32f2f", brandFooter:"Thank you for your payment!", checkoutTitle:"", checkoutSubtitle:"", checkoutSteps:"1. Open GCash > Scan QR\n2. Amount already set - Confirm\n3. Screenshot receipt\n4. Click I Paid below" });
+  const [branding, setBranding] = useState({ brandName:"", brandEmoji:"ðŸŽ„", brandColor:"#d32f2f", brandFooter:"Thank you for your payment!", checkoutTitle:"", checkoutSubtitle:"", checkoutSteps:"1. Open GCash > Scan QR\n2. Amount already set - Confirm\n3. Screenshot receipt\n4. Click I Paid below" });
   const [showBranding, setShowBranding] = useState(false);
   const [newPay, setNewPay] = useState({ customerName:"", amountPesos:"99" });
 
@@ -38,7 +38,7 @@ export default function MerchantDashboard() {
   async function createPayment() {
     if (!newPay.customerName.trim()) { setMsg("Enter customer name"); return; }
     const r = await fetch("/api/requests", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ customerName: newPay.customerName, amountPesos: Number(newPay.amountPesos) }) });
-    const d = await r.json(); if (!r.ok) { setMsg(d.error||"Failed"); return; } setMsg("✅ Link created"); load();
+    const d = await r.json(); if (!r.ok) { setMsg(d.error||"Failed"); return; } setMsg("âœ… Link created"); load();
   }
   async function manual(action: "approve"|"reject", req: any) {
     const note = action==="approve" ? prompt("Optional note (GCash ref you saw):","")||"" : prompt("Reason for rejecting:","")||"";
@@ -72,10 +72,10 @@ export default function MerchantDashboard() {
 
     {/* BRANDING */}
     <div style={{border:"1px solid #ddd",borderRadius:12,padding:14,marginBottom:12}}>
-      <div style={{display:"flex",justifyContent:"space-between"}}><b>🎨 Design Your Pay Page</b><button onClick={()=>setShowBranding(!showBranding)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",background:"#fff"}}>{showBranding?"Hide":"Edit"}</button></div>
+      <div style={{display:"flex",justifyContent:"space-between"}}><b>ðŸŽ¨ Design Your Pay Page</b><button onClick={()=>setShowBranding(!showBranding)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #ddd",background:"#fff"}}>{showBranding?"Hide":"Edit"}</button></div>
       {showBranding && <div style={{marginTop:10,display:"grid",gap:8}}>
         <input placeholder="Store Name" value={branding.brandName} onChange={e=>setBranding({...branding,brandName:e.target.value})} style={{padding:10,borderRadius:8,border:"1px solid #ddd"}} />
-        <input placeholder="Emoji 🎄" value={branding.brandEmoji} onChange={e=>setBranding({...branding,brandEmoji:e.target.value})} style={{padding:10,borderRadius:8,border:"1px solid #ddd"}} />
+        <input placeholder="Emoji ðŸŽ„" value={branding.brandEmoji} onChange={e=>setBranding({...branding,brandEmoji:e.target.value})} style={{padding:10,borderRadius:8,border:"1px solid #ddd"}} />
         <input type="color" value={branding.brandColor} onChange={e=>setBranding({...branding,brandColor:e.target.value})} style={{height:40}} />
         <input placeholder="Pay Page Title" value={branding.checkoutTitle} onChange={e=>setBranding({...branding,checkoutTitle:e.target.value})} style={{padding:10,borderRadius:8,border:"1px solid #ddd"}} />
         <input placeholder="Pay Page Subtitle" value={branding.checkoutSubtitle} onChange={e=>setBranding({...branding,checkoutSubtitle:e.target.value})} style={{padding:10,borderRadius:8,border:"1px solid #ddd"}} />
@@ -89,8 +89,8 @@ export default function MerchantDashboard() {
     <div style={{border:"1px solid #ddd",borderRadius:12,padding:14,marginBottom:12}}>
       <b>GCash QR - For Payment (Upload From Phone)</b>
       <p style={{fontSize:12,color:"#666"}}>This is the QR customer scans to PAY in GCash app. Different from Merchant QR above. Upload QR you saved from GCash app.</p>
-      <div style={{marginBottom:10}}><b>QR for ₱99 {me?.gcashQr99 ? "✅ Uploaded" : "❌ Not uploaded"}</b><br/><input type="file" accept="image/*" onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadQR("99", f); }} /><br/><span style={{fontSize:12,color:"#666"}}>GCash app → QR → Set ₱99 → Save → Upload here</span></div>
-      <div><b>QR for ₱149 {me?.gcashQr149 ? "✅ Uploaded" : "❌ Not uploaded"}</b><br/><input type="file" accept="image/*" onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadQR("149", f); }} /><br/><span style={{fontSize:12,color:"#666"}}>GCash app → QR → Set ₱149 → Save → Upload here</span></div>
+      <div style={{marginBottom:10}}><b>QR for â‚±99 {me?.gcashQr99 ? "âœ… Uploaded" : "âŒ Not uploaded"}</b><br/><input type="file" accept="image/*" onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadQR("99", f); }} /><br/><span style={{fontSize:12,color:"#666"}}>GCash app â†’ QR â†’ Set â‚±99 â†’ Save â†’ Upload here</span></div>
+      <div><b>QR for â‚±149 {me?.gcashQr149 ? "âœ… Uploaded" : "âŒ Not uploaded"}</b><br/><input type="file" accept="image/*" onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadQR("149", f); }} /><br/><span style={{fontSize:12,color:"#666"}}>GCash app â†’ QR â†’ Set â‚±149 â†’ Save â†’ Upload here</span></div>
       {(me?.gcashQr99 || me?.gcashQr149) && <div style={{display:"flex",gap:8,marginTop:10}}>{me?.gcashQr99 && <img src={me.gcashQr99} style={{width:120,borderRadius:8}} />}{me?.gcashQr149 && <img src={me.gcashQr149} style={{width:120,borderRadius:8}} />}</div>}
     </div>
 
@@ -111,11 +111,11 @@ export default function MerchantDashboard() {
         {/* MANUAL APPROVE - THIS IS THE BUTTON THAT WAS MISSING */}
         {p.status!=="paid" && p.status!=="rejected" && (
           <div style={{display:"flex",gap:8,marginTop:10}}>
-            <button onClick={()=>manual("approve", p)} style={{flex:1,padding:12,borderRadius:10,background:"#2e7d32",color:"#fff",border:"none",fontWeight:700,cursor:"pointer"}}>✅ Approve Manually</button>
-            <button onClick={()=>manual("reject", p)} style={{flex:1,padding:12,borderRadius:10,background:"#fff",color:"#c00",border:"1px solid #fbb",fontWeight:700,cursor:"pointer"}}>❌ Reject</button>
+            <button onClick={()=>manual("approve", p)} style={{flex:1,padding:12,borderRadius:10,background:"#2e7d32",color:"#fff",border:"none",fontWeight:700,cursor:"pointer"}}>âœ… Approve Manually</button>
+            <button onClick={()=>manual("reject", p)} style={{flex:1,padding:12,borderRadius:10,background:"#fff",color:"#c00",border:"1px solid #fbb",fontWeight:700,cursor:"pointer"}}>âŒ Reject</button>
           </div>
         )}
-        {p.status==="paid" && <div style={{marginTop:8,color:"#2e7d32",fontWeight:700}}>✅ PAID - Customer can get photos</div>}
+        {p.status==="paid" && <div style={{marginTop:8,color:"#2e7d32",fontWeight:700}}>âœ… PAID - Customer can get photos</div>}
       </div>
     ))}
     {payments.length===0 && <p>No payments yet.</p>}
@@ -123,3 +123,4 @@ export default function MerchantDashboard() {
 }
 
 // rebuild-1
+
