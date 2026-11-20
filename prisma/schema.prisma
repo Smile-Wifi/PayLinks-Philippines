@@ -1,5 +1,5 @@
 // PesoMatch Gateway - Production Schema
-// SQLite for local / easy deploy. Switch provider to "postgresql" for production.
+// PostgreSQL (Neon) - Fixed amounts, NO TAG, Dual AI, GCash QR
 
 generator client {
   provider = "prisma-client-js"
@@ -13,9 +13,9 @@ datasource db {
 model Merchant {
   id            String   @id @default(cuid())
   name          String
-  apiKey        String   @unique // pm_live_xxx or pm_test_xxx
-  webhookSecret String   // for HMAC signing
-  webhookUrl    String?  // optional destination for payment.succeeded
+  apiKey        String   @unique
+  webhookSecret String
+  webhookUrl    String?
   brandName     String?
   brandEmoji    String   @default("💰")
   brandColor    String   @default("#0b6bff")
@@ -25,10 +25,14 @@ model Merchant {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  // NEW - for simple login, added by us:
-  gcashNumber   String?  @unique // 09171234567
-  gcashName     String?  // ANA SANTOS
-  pin           String?  // 4-digit PIN, e.g. "1234"
+  gcashNumber   String?  @unique
+  gcashName     String?
+  pin           String?
+
+  // GCash QR for fixed packages - customer sees correct QR per amount
+  gcashQr99     String?
+  gcashQr149    String?
+  gcashQrUrl    String?
 
   requests      PaymentRequest[]
   payments      Payment[]
@@ -40,16 +44,16 @@ model Merchant {
 model PaymentRequest {
   id              String   @id @default(cuid())
   merchantId      String
-  externalId      String?  // optional merchant-side order id
+  externalId      String?
   customerName    String
-  amountCentavos  Int      // exact payable amount including unique tag (e.g. 14937 = ₱149.37)
-  baseAmount      Int      // original amount without tag (e.g. 14900)
+  amountCentavos  Int      // EXACT, NO TAG: 1000=10, 1500=15, 9900=99, 14900=149
+  baseAmount      Int      // same as amountCentavos (kept for compatibility)
   status          String   // pending | paid | expired | review | rejected
   expiresAt       DateTime
-  confirmationToken String? @unique // PM-XXXX-XXXX-XXXX single-use
+  confirmationToken String? @unique
   tokenConfirmedAt DateTime?
   paidAt          DateTime?
-  customerEvidence String? // optional GCash ref entered by customer
+  customerEvidence String?
   notes           String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -58,7 +62,7 @@ model PaymentRequest {
   payment         Payment?
   auditLogs       AuditLog[]
 
-  @@unique([merchantId, amountCentavos, status], name: "unique_pending_tag") // enforced in app logic for pending only
+  // REMOVED: @@unique([merchantId, amountCentavos, status]) - it blocked 2 customers buying same fixed price at same time
   @@index([merchantId, status])
   @@index([amountCentavos, status])
   @@index([confirmationToken])
@@ -68,19 +72,19 @@ model PaymentRequest {
 model Payment {
   id              String   @id @default(cuid())
   merchantId      String
-  requestId       String?  @unique // null if unmatched
-  gcashRef        String   // unique reference from SMS
+  requestId       String?  @unique
+  gcashRef        String
   amountCentavos  Int
   senderName      String?
   rawSms          String?
-  matchedBy       String   // auto | admin | late
+  matchedBy       String
   matchedAt       DateTime @default(now())
   createdAt       DateTime @default(now())
 
   merchant        Merchant @relation(fields: [merchantId], references: [id])
   request         PaymentRequest? @relation(fields: [requestId], references: [id])
 
-  @@unique([merchantId, gcashRef]) // hard uniqueness on reference per merchant
+  @@unique([merchantId, gcashRef])
   @@index([merchantId, amountCentavos])
   @@index([matchedAt])
 }
@@ -89,11 +93,11 @@ model AuditLog {
   id          String   @id @default(cuid())
   merchantId  String
   requestId   String?
-  actor       String   // system | auto | admin | merchant | customer
+  actor       String
   action      String
   details     String?
   prevHash    String
-  hash        String   // FNV-1a style hash chain
+  hash        String
   createdAt   DateTime @default(now())
 
   merchant    Merchant @relation(fields: [merchantId], references: [id])
@@ -107,10 +111,10 @@ model WebhookDelivery {
   id          String   @id @default(cuid())
   merchantId  String
   requestId   String
-  event       String   // payment.succeeded
-  payload     String   // JSON
+  event       String
+  payload     String
   signature   String
-  status      String   // pending | delivered | failed
+  status      String
   attempts    Int      @default(0)
   lastError   String?
   deliveredAt DateTime?
