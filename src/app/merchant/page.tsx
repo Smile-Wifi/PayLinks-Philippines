@@ -8,11 +8,11 @@ export default function MerchantDashboard() {
   const [fixedAmount, setFixedAmount] = useState("");
   const [fixedList, setFixedList] = useState<any[]>([]);
   const [merchantId, setMerchantId] = useState("");
-  const [showQR, setShowQR] = useState(false);
+  const [me, setMe] = useState<any>(null);
 
   useEffect(() => {
     fetch("/api/merchant/requests").then(r => r.json()).then(d => setRequests(Array.isArray(d) ? d : []));
-    fetch("/api/merchant/me").then(r => r.json()).then(d => { if (d.id) setMerchantId(d.id); }).catch(() => {});
+    fetch("/api/merchant/me").then(r => r.json()).then(d => { if (d.id) { setMerchantId(d.id); setMe(d); } }).catch(() => {});
     const saved = localStorage.getItem("fixedPayments");
     if (saved) setFixedList(JSON.parse(saved));
   }, []);
@@ -31,6 +31,23 @@ export default function MerchantDashboard() {
     fetch("/api/merchant/requests").then(r => r.json()).then(d => setRequests(Array.isArray(d) ? d : []));
   }
 
+  // NEW: Upload GCash QR for 99 / 149 - from phone gallery
+  async function uploadQR(pkg: "99" | "149", file: File) {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const b64 = (reader.result as string).split(",")[1];
+      const res = await fetch("/api/merchant/qr", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ package: pkg, imageBase64: b64, mimeType: file.type }) });
+      const d = await res.json();
+      if (d.ok) {
+        alert(d.message);
+        // Refresh me to show new QR
+        const m = await fetch("/api/merchant/me").then(r => r.json());
+        setMe(m);
+      } else alert(d.error);
+    };
+    reader.readAsDataURL(file);
+  }
+
   const totalPaid = requests.filter((r: any) => r.status === "paid").reduce((s: number, r: any) => s + r.amountCentavos / 100, 0);
   const publicUrl = merchantId ? `${typeof window !== "undefined" ? window.location.origin : ""}/m/${merchantId}` : "";
   const qrImg = publicUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(publicUrl)}` : "";
@@ -39,11 +56,32 @@ export default function MerchantDashboard() {
     <div style={{ maxWidth: 620, margin: "0 auto", padding: 20, fontFamily: "sans-serif" }}>
       <h1>My Store</h1>
       <div style={{ background: "#e8f5e9", padding: 16, borderRadius: 8 }}><b>Today Paid: P{totalPaid.toFixed(2)}</b></div>
+      {me && <p style={{ fontSize: 13 }}>Store: <b>{me.brandName || me.name}</b> | 【entity-GCash¦canonical_name=GCash】: <b>{me.gcashName || ""}</b> {me.gcashNumber || ""}</p>}
 
       <div style={{ border: "2px dashed #0b6bff", padding: 16, marginTop: 16, borderRadius: 12, textAlign: "center" }}>
         <h2>Your Merchant QR - Print This</h2>
         {qrImg ? (<><img src={qrImg} alt="Merchant QR" /><p style={{ wordBreak: "break-all" }}>{publicUrl}</p><button onClick={() => { navigator.clipboard.writeText(publicUrl); alert("Link copied!"); }}>Copy Link</button> <button onClick={() => window.print()}>Print QR</button></>) : (<p>Loading QR...</p>)}
         <p style={{ fontSize: 13, color: "#555" }}>Customer scans QR - enters name - gets exact amount to pay. No need to create payment one-by-one.</p>
+      </div>
+
+      {/* NEW: 【entity-GCash¦canonical_name=GCash】 QR Upload - This is the payment QR, different from above */}
+      <div style={{ border: "2px solid #0b6bff", padding: 16, marginTop: 16, borderRadius: 12 }}>
+        <h2>【entity-GCash¦canonical_name=GCash】 QR - For Payment (Upload From Phone)</h2>
+        <p style={{ fontSize: 13 }}>This is the QR customer scans to PAY in 【entity-GCash¦canonical_name=GCash】 app. Different from Merchant QR above. Upload QR you saved from GCash app.</p>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 200, border: "1px solid #ddd", padding: 12, borderRadius: 8, textAlign: "center" }}>
+            <b>QR for ₱99</b><br />{me?.gcashQr99 ? "✅ Uploaded" : "❌ Missing"}<br />
+            {me?.gcashQr99 && <img src={me.gcashQr99} style={{ width: 140, height: 140, objectFit: "contain" }} />}<br />
+            <input type="file" accept="image/*" onChange={e => e.target.files?.[0] && uploadQR("99", e.target.files[0])} />
+            <p style={{ fontSize: 11 }}>GCash app → QR → Set ₱99 → Save → Upload here</p>
+          </div>
+          <div style={{ flex: 1, minWidth: 200, border: "1px solid #ddd", padding: 12, borderRadius: 8, textAlign: "center" }}>
+            <b>QR for ₱149</b><br />{me?.gcashQr149 ? "✅ Uploaded" : "❌ Missing"}<br />
+            {me?.gcashQr149 && <img src={me.gcashQr149} style={{ width: 140, height: 140, objectFit: "contain" }} />}<br />
+            <input type="file" accept="image/*" onChange={e => e.target.files?.[0] && uploadQR("149", e.target.files[0])} />
+            <p style={{ fontSize: 11 }}>GCash app → QR → Set ₱149 → Save → Upload here</p>
+          </div>
+        </div>
       </div>
 
       <h2>Fixed Payments - Same Price For All Customers</h2>
