@@ -11,7 +11,11 @@ import type {
 
 const DEFAULT_EXPIRY_MINUTES = 15;
 const MAX_TAG_ATTEMPTS = 99;
-const AI_AUTO_THRESHOLD = 85; // confidence >= this + exact amount → auto paid
+
+/** Auto-approve only when explicitly enabled AND confidence is high. Default: review only. */
+const AI_AUTO_APPROVE_ENABLED =
+  process.env.AI_AUTO_APPROVE === "true" || process.env.AI_AUTO_APPROVE === "1";
+const AI_AUTO_THRESHOLD = Number(process.env.AI_AUTO_THRESHOLD || "92");
 
 /**
  * Allocate a unique centavo tag for the given base amount.
@@ -46,8 +50,18 @@ async function allocateCentavoTag(
  */
 export async function createPaymentRequest(
   merchantId: string,
-  input: CreateRequestInput
+  input: CreateRequestInput & { idempotencyKey?: string }
 ) {
+  if (input.idempotencyKey) {
+    const existing = await prisma.paymentRequest.findFirst({
+      where: {
+        merchantId,
+        idempotencyKey: input.idempotencyKey,
+      },
+    });
+    if (existing) return existing;
+  }
+
   const amountCentavos = await allocateCentavoTag(merchantId, input.amountPesos);
   const baseAmount = Math.round(input.amountPesos * 100);
   const expiresIn = (input.expiresInMinutes ?? DEFAULT_EXPIRY_MINUTES) * 60 * 1000;
@@ -61,6 +75,7 @@ export async function createPaymentRequest(
       status: "pending",
       expiresAt: new Date(Date.now() + expiresIn),
       externalId: input.externalId,
+      idempotencyKey: input.idempotencyKey,
     },
   });
 
@@ -76,12 +91,28 @@ export async function createPaymentRequest(
 }
 
 /**
- * Core matching engine (original + AI-enhanced SMS path)
+ * Core matching engine
  */
 export async function ingestPayment(
   merchantId: string,
-  input: IngestPaymentInput
+  input: IngestPaymentInput & { idempotencyKey?: string }
 ): Promise<{ result: MatchResult; message: string; paymentId?: string }> {
+  // Idempotency: same key returns previous outcome without double-processing
+  if (input.idempotencyKey) {
+    const prior = await prisma.payment.findFirst({
+      where: { merchantId, idempotencyKey: input.idempotencyKey },
+    });
+    if (prior) {
+      return {
+        result: prior.requestId
+          ? { type: "matched", requestId: prior.requestId, by: "auto" }
+          : { type: "unmatched" },
+        message: "Idempotent replay",
+        paymentId: prior.id,
+      };
+    }
+  }
+
   // 1. Hard uniqueness on reference
   const existing = await prisma.payment.findUnique({
     where: {
@@ -109,6 +140,7 @@ export async function ingestPayment(
       senderName: input.senderName,
       rawSms: input.rawSms,
       matchedBy: "auto",
+      idempotencyKey: input.idempotencyKey,
     },
   });
 
@@ -180,7 +212,8 @@ export async function ingestPayment(
 }
 
 /**
- * NEW: Validate payment from customer-uploaded screenshot (AI)
+ * Validate payment from customer-uploaded screenshot (AI).
+ * Default policy: never auto-mark paid. Requires AI_AUTO_APPROVE=true + high confidence.
  */
 export async function validateWithScreenshot(
   requestId: string,
@@ -228,7 +261,6 @@ export async function validateWithScreenshot(
     };
   }
 
-  // Call AI
   const { extractFromScreenshot } = await import("./ai");
   const extraction = await extractFromScreenshot(imageBase64, mimeType);
 
@@ -242,29 +274,32 @@ export async function validateWithScreenshot(
     extractedAt: new Date().toISOString(),
   };
 
-  // Save evidence
   await prisma.paymentRequest.update({
-  where: { id: requestId },
-  data: {
-    notes: JSON.stringify(evidence),
-    customerEvidence: extraction.gcashRef || undefined,
-  },
-});
+    where: { id: requestId },
+    data: {
+      notes: JSON.stringify(evidence),
+      customerEvidence: extraction.gcashRef || undefined,
+    },
+  });
 
   const amountMatch =
     extraction.amountCentavos !== null &&
     extraction.amountCentavos === request.amountCentavos;
 
-  // Decision logic
-  if (amountMatch && extraction.confidence >= AI_AUTO_THRESHOLD) {
-    // Auto-approve
+  // Auto-approve is OFF by default. Only when explicitly enabled and high confidence.
+  const canAutoApprove =
+    AI_AUTO_APPROVE_ENABLED &&
+    amountMatch &&
+    extraction.confidence >= AI_AUTO_THRESHOLD &&
+    !!extraction.gcashRef;
+
+  if (canAutoApprove) {
     let paymentId = request.payment?.id;
     if (!paymentId) {
-      // Create payment record from AI data
       const p = await prisma.payment.create({
         data: {
           merchantId: request.merchantId,
-          gcashRef: extraction.gcashRef || `ai-${Date.now()}`,
+          gcashRef: extraction.gcashRef!,
           amountCentavos: request.amountCentavos,
           senderName: extraction.senderName,
           matchedBy: "ai",
@@ -297,8 +332,8 @@ export async function validateWithScreenshot(
     };
   }
 
-  // Medium confidence or amount mismatch → review
-  if (extraction.confidence >= 50 || amountMatch) {
+  // Default path: human review
+  if (extraction.confidence >= 40 || amountMatch) {
     await prisma.paymentRequest.update({
       where: { id: requestId },
       data: { status: "review" },
@@ -308,7 +343,7 @@ export async function validateWithScreenshot(
       requestId,
       "ai",
       "Needs review (AI)",
-      `confidence ${extraction.confidence}% | amountMatch=${amountMatch}`
+      `confidence ${extraction.confidence}% | amountMatch=${amountMatch} | auto=${AI_AUTO_APPROVE_ENABLED}`
     );
 
     return {
@@ -321,7 +356,6 @@ export async function validateWithScreenshot(
     };
   }
 
-  // Low confidence
   return {
     ok: false,
     status: "pending",
@@ -332,9 +366,6 @@ export async function validateWithScreenshot(
   };
 }
 
-/**
- * Mark a request as paid, generate token, queue webhook.
- */
 async function markPaid(
   requestId: string,
   paymentId: string,
@@ -372,9 +403,6 @@ async function markPaid(
   await queueWebhook(request);
 }
 
-/**
- * Manual approve (admin override)
- */
 export async function approveRequest(
   requestId: string,
   merchantId: string,
@@ -413,9 +441,6 @@ export async function approveRequest(
   );
 }
 
-/**
- * Reject a request
- */
 export async function rejectRequest(
   requestId: string,
   merchantId: string,
@@ -429,9 +454,6 @@ export async function rejectRequest(
   await appendAudit(merchantId, requestId, "admin", "Rejected", note);
 }
 
-/**
- * Confirm a single-use token (staff side)
- */
 export async function confirmToken(merchantId: string, token: string) {
   const request = await prisma.paymentRequest.findFirst({
     where: { merchantId, confirmationToken: token.toUpperCase() },
@@ -462,9 +484,6 @@ export async function confirmToken(merchantId: string, token: string) {
   };
 }
 
-/**
- * Expire pending requests past their deadline
- */
 export async function expireStaleRequests(merchantId?: string) {
   const where: any = {
     status: "pending",
@@ -488,7 +507,6 @@ export async function expireStaleRequests(merchantId?: string) {
   return stale.length;
 }
 
-/** Hash-chained audit log */
 async function appendAudit(
   merchantId: string,
   requestId: string | null,
@@ -525,7 +543,6 @@ async function appendAudit(
   });
 }
 
-/** Queue a signed webhook delivery */
 async function queueWebhook(request: {
   id: string;
   merchantId: string;
@@ -561,17 +578,12 @@ async function queueWebhook(request: {
       payload,
       signature,
       status: "pending",
+      nextAttempt: new Date(),
     },
   });
 }
 
-/**
- * Parse a GCash-style SMS (kept for backward compatibility)
- * Now also tries AI if rules are weak.
- */
 export async function parseGCashSms(sms: string) {
-  // First try fast rules
-  const rules = extractFromSms; // will be called properly below
   const result = await extractFromSms(sms);
   if (result.amountCentavos && result.gcashRef) {
     return {
