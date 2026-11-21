@@ -32,10 +32,127 @@ const NAV = [
 const QR_PATTERN = [1,1,1,1,1,0,1,0,1,1,1, 1,0,0,0,1,1,0,1,0,0,1, 1,0,1,0,1,0,1,1,0,1,1, 1,0,1,0,1,1,0,0,1,0,1, 1,0,1,0,1,0,1,0,0,1,1, 0,1,0,1,0,1,0,1,1,0,0, 1,0,1,0,1,1,1,0,1,0,1, 0,1,0,1,0,0,1,1,0,1,0, 1,1,1,1,1,0,0,1,0,1,1, 1,0,0,0,1,1,0,1,1,0,1, 1,0,1,0,1,0,1,0,0,1,1];
 
 async function callApi(action: string, args: Record<string, unknown>) {
-  const res = await fetch("actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, args }) });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || json?.error) throw new Error(json?.error || `Request failed (${res.status})`);
-  return json.data;
+  const col = args.collection as string | undefined;
+
+  if (col === "paylinks_payment_links") {
+    if (action === "records.list") {
+      const res = await fetch("/api/requests", { cache: "no-store" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || `Request failed (${res.status})`);
+      const rows = json.requests || json || [];
+      return {
+        records: rows.map((r: any) => ({
+          id: r.id,
+          created_at: r.createdAt,
+          value: {
+            paymentId: r.id,
+            name: r.customerName,
+            amount: `P${(r.amountCentavos / 100).toFixed(2)}`,
+            amountValue: r.amountCentavos / 100,
+            link: `${PAY_LINK_BASE}${r.id}`,
+            note: "",
+            status: r.status === "paid" ? "PAID" : r.status === "rejected" ? "REJECTED" : "PENDING",
+            createdLabel: new Date(r.createdAt).toLocaleString("en-PH"),
+          },
+        })),
+      };
+    }
+    if (action === "records.create") {
+      const v = args.value as any;
+      const res = await fetch("/api/requests", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ customerName: v.name, amountPesos: v.amountValue }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || `Request failed (${res.status})`);
+      return { id: json.id || json.request?.id || v.paymentId };
+    }
+    if (action === "records.replace") {
+      const v = args.value as any;
+      const res = await fetch(`/api/merchant/requests/${v.paymentId}/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: v.status === "PAID" ? "approve" : "reject", note: "" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || `Request failed (${res.status})`);
+      return { id: args.id };
+    }
+    if (action === "records.delete") {
+      const res = await fetch(`/api/requests/${args.id}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || `Request failed (${res.status})`);
+      return { id: args.id };
+    }
+  }
+
+  if (col === "paylinks_settings") {
+    if (action === "records.list") {
+      const [meRes, brandRes] = await Promise.all([
+        fetch("/api/merchant/me", { cache: "no-store" }),
+        fetch("/api/merchant/branding", { cache: "no-store" }),
+      ]);
+      if (meRes.status === 401) throw new Error("unauthorized");
+      const me = await meRes.json().catch(() => ({}));
+      const brand = await brandRes.json().catch(() => ({}));
+      return {
+        records: [{
+          id: me.id || "me",
+          value: {
+            storeName: brand.brandName || me.brandName || me.name || "",
+            gcashName: me.gcashName || "",
+            gcashNumber: me.gcashNumber || "",
+            amount99: true,
+            amount149: true,
+            pinApprove: true,
+            pinRefund: true,
+          },
+        }],
+      };
+    }
+    if (action === "records.replace" || action === "records.create") {
+      const v = args.value as any;
+      const res = await fetch("/api/merchant/branding", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          brandName: v.storeName,
+          brandEmoji: "🎄",
+          brandColor: "#d32f2f",
+          brandFooter: "Thank you for your payment!",
+          checkoutTitle: "",
+          checkoutSubtitle: "",
+          checkoutSteps: "1. Open GCash > Scan QR\n2. Amount already set - Confirm\n3. Screenshot receipt\n4. Click I Paid below",
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || `Request failed (${res.status})`);
+      return { id: args.id || "me" };
+    }
+  }
+
+  if (col === "paylinks_rotations") {
+    if (action === "records.list") return { records: [] };
+    if (action === "records.create") return { id: `rot-${Date.now()}` };
+  }
+
+  if (col === "paylinks_payment_status") {
+    if (action === "records.list") return { records: [] };
+    if (action === "records.create" || action === "records.replace") {
+      const v = args.value as any;
+      const res = await fetch(`/api/merchant/requests/${v.paymentId}/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: v.status === "PAID" ? "approve" : "reject", note: "" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || `Request failed (${res.status})`);
+      return { id: args.id || v.paymentId };
+    }
+  }
+
+  throw new Error(`Unmapped action: ${action} / ${col || "(no collection)"}`);
 }
 function makeDemoKey(prefix: string) {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -137,7 +254,17 @@ export default function App() {
     setCreatedLinks(linkList.slice().reverse());
     setLinkRecordIds(linkIds);
   }
-  useEffect(() => { reloadRecords().catch(() => setBackendOk(false)).finally(() => setLoading(false)); }, []);
+  useEffect(() => {
+    reloadRecords()
+      .catch((e) => {
+        if (e instanceof Error && e.message === "unauthorized") {
+          window.location.href = "/merchant/login";
+        } else {
+          setBackendOk(false);
+        }
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
   function go(id: string) { setActive(id); document.getElementById(id)?.scrollIntoView({ behavior: "smooth" }); }
 
