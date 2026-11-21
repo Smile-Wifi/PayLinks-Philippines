@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { LayoutDashboard, Store, KeyRound, Webhook, ShieldCheck, CreditCard, TriangleAlert, Copy, Check, Eye, EyeOff, RefreshCw, QrCode, Save, BadgeCheck, X, ChevronRight, Landmark, Zap, Clock, Lock, Link2, Plus, Trash2 } from "lucide-react";
 
-type Toast = { text: string; kind: "ok" | "warn" | "error" } | null;
+type ToastKind = "ok" | "warn" | "error";
+type Toast = { text: string; kind: ToastKind } | null;
 type Rotation = { id: string; kind: string; last4: string; dateLabel: string; created_at?: string };
 type Payment = { id: string; name: string; amount: string; method: string; time: string; status: "PAID" | "PENDING" | "REJECTED" };
 type PaymentLink = { id: string; name: string; amount: string; amountValue: number; link: string; note: string; status: "PAID" | "PENDING" | "REJECTED"; createdLabel: string };
@@ -103,7 +104,7 @@ export default function App() {
     return [...links, ...SAMPLE_PAYMENTS.map(p => ({ ...p, status: (overrides[p.id] as Payment["status"]) || p.status }))];
   }, [createdLinks, overrides]);
 
-  function flash(text: string, kind: Toast["kind"] = "ok") { setToast({ text, kind }); window.setTimeout(() => setToast(null), 3200); }
+  function flash(text: string, kind: ToastKind = "ok") { setToast({ text, kind }); window.setTimeout(() => setToast(null), 3200); }
   function copyText(text: string, label: string) {
     const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select();
     try { document.execCommand("copy"); flash(`${label} Copied!`); } catch { flash("Copy not available in this preview", "warn"); } finally { ta.remove(); }
