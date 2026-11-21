@@ -2,24 +2,41 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireMerchant } from "@/lib/auth";
 import { ingestPayment, parseGCashSms } from "@/lib/matching";
+import { rateLimit, getClientIp } from "@/lib/rate-limit";
 
 const ingestSchema = z.object({
   amountCentavos: z.number().int().positive().optional(),
   gcashRef: z.string().min(8).max(40).optional(),
   senderName: z.string().max(80).optional(),
   rawSms: z.string().max(2000).optional(),
+  idempotencyKey: z.string().min(8).max(64).optional(),
 });
 
 /**
  * POST /api/payments/ingest
- *
- * Accept either structured fields or a raw SMS string.
- * This is the endpoint your SMS forwarder / notification listener should call.
+ * Accept structured fields or raw SMS.
+ * Rate-limited. Supports idempotencyKey.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireMerchant(req);
   if ("error" in auth) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
+  const ip = getClientIp(req);
+  const rl = rateLimit(
+    `ingest:${auth.merchant.id}:${ip}`,
+    60,
+    60 * 1000 // 60 / minute per merchant+ip
+  );
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: "Rate limit exceeded" },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rl.retryAfterSeconds) },
+      }
+    );
   }
 
   let body: unknown;
@@ -66,7 +83,8 @@ export async function POST(req: NextRequest) {
     gcashRef,
     senderName,
     rawSms: parsed.data.rawSms,
-  });
+    idempotencyKey: parsed.data.idempotencyKey,
+  } as any);
 
   return NextResponse.json(result);
 }

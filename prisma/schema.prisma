@@ -1,5 +1,6 @@
 // PesoMatch Gateway - Production Schema
-// PostgreSQL (Neon) - Fixed amounts, NO TAG, Dual AI, GCash QR
+// PostgreSQL (Neon)
+// P0 security: hashed API keys + PINs, idempotency support
 
 generator client {
   provider = "prisma-client-js"
@@ -13,7 +14,9 @@ datasource db {
 model Merchant {
   id            String   @id @default(cuid())
   name          String
-  apiKey        String   @unique
+  apiKey        String   @unique // legacy plaintext (migration); prefer apiKeyHash
+  apiKeyHash    String?  @unique // sha256 of full key
+  apiKeyPrefix  String?  // first chars for indexed lookup
   webhookSecret String
   webhookUrl    String?
   brandName     String?
@@ -27,42 +30,50 @@ model Merchant {
 
   gcashNumber   String?  @unique
   gcashName     String?
-  pin           String?
+  pin           String?  // legacy plaintext; cleared after upgrade to pinHash
+  pinHash       String?  // scrypt hash
 
-  // GCash QR for fixed packages - customer sees correct QR per amount
+  // GCash QR for fixed packages
   gcashQr99     String?
   gcashQr149    String?
   gcashQrUrl    String?
+
+  // Security / ops
+  failedLoginCount Int      @default(0)
+  lockedUntil      DateTime?
 
   requests      PaymentRequest[]
   payments      Payment[]
   auditLogs     AuditLog[]
 
   @@index([apiKey])
+  @@index([apiKeyPrefix])
+  @@index([apiKeyHash])
 }
 
 model PaymentRequest {
-  id              String   @id @default(cuid())
-  merchantId      String
-  externalId      String?
-  customerName    String
-  amountCentavos  Int      // EXACT, NO TAG: 1000=10, 1500=15, 9900=99, 14900=149
-  baseAmount      Int      // same as amountCentavos (kept for compatibility)
-  status          String   // pending | paid | expired | review | rejected
-  expiresAt       DateTime
-  confirmationToken String? @unique
-  tokenConfirmedAt DateTime?
-  paidAt          DateTime?
-  customerEvidence String?
-  notes           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                String   @id @default(cuid())
+  merchantId        String
+  externalId        String?
+  idempotencyKey    String?
+  customerName      String
+  amountCentavos    Int
+  baseAmount        Int
+  status            String   // pending | paid | expired | review | rejected
+  expiresAt         DateTime
+  confirmationToken String?  @unique
+  tokenConfirmedAt  DateTime?
+  paidAt            DateTime?
+  customerEvidence  String?
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  merchant        Merchant @relation(fields: [merchantId], references: [id])
-  payment         Payment?
-  auditLogs       AuditLog[]
+  merchant          Merchant @relation(fields: [merchantId], references: [id])
+  payment           Payment?
+  auditLogs         AuditLog[]
 
-  // REMOVED: @@unique([merchantId, amountCentavos, status]) - it blocked 2 customers buying same fixed price at same time
+  @@unique([merchantId, idempotencyKey])
   @@index([merchantId, status])
   @@index([amountCentavos, status])
   @@index([confirmationToken])
@@ -80,11 +91,13 @@ model Payment {
   matchedBy       String
   matchedAt       DateTime @default(now())
   createdAt       DateTime @default(now())
+  idempotencyKey  String?
 
   merchant        Merchant @relation(fields: [merchantId], references: [id])
   request         PaymentRequest? @relation(fields: [requestId], references: [id])
 
   @@unique([merchantId, gcashRef])
+  @@unique([merchantId, idempotencyKey])
   @@index([merchantId, amountCentavos])
   @@index([matchedAt])
 }
@@ -114,12 +127,14 @@ model WebhookDelivery {
   event       String
   payload     String
   signature   String
-  status      String
+  status      String   // pending | delivered | failed
   attempts    Int      @default(0)
   lastError   String?
   deliveredAt DateTime?
+  nextAttempt DateTime?
   createdAt   DateTime @default(now())
 
   @@index([merchantId, status])
   @@index([requestId])
+  @@index([status, nextAttempt])
 }
