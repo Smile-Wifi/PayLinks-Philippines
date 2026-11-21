@@ -1,3 +1,4 @@
+"use client";
 import React, { useEffect, useMemo, useState } from "react";
 import { LayoutDashboard, Store, KeyRound, Webhook, ShieldCheck, CreditCard, TriangleAlert, Copy, Check, Eye, EyeOff, RefreshCw, QrCode, Save, BadgeCheck, X, ChevronRight, Landmark, Zap, Clock, Lock, Link2, Plus, Trash2 } from "lucide-react";
 
